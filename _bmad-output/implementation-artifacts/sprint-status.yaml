@@ -1,0 +1,130 @@
+# generated: 2026-04-11
+# last_updated: 2026-04-11
+# project: n8n-chatbot
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-04-11
+last_updated: 2026-04-11
+project: n8n-chatbot
+project_key: NOKEY
+tracking_system: file-system
+story_location: _bmad-output/implementation-artifacts
+
+development_status:
+  # Epic 1: Client Can Reach the Firm on Telegram
+  epic-1: backlog
+  1-1-infrastructure-verification-n8n-platform-pinning: backlog
+  1-2-credential-environment-variable-and-telegram-group-bootstrap: backlog
+  1-3-empty-canvas-workflow-shells-and-naming-conventions: backlog
+  1-4-wire-up-minimal-telegram-echo-bot: backlog
+  epic-1-retrospective: optional
+
+  # Epic 2: Conversational Triage Agent with Memory & Disclosure
+  epic-2: backlog
+  2-1-wire-the-ai-agent-with-groq-chat-model-and-postgres-chat-memory: backlog
+  2-2-input-sanitization-and-deterministic-router: backlog
+  2-3-structured-triage-agent-v1-prompt-with-hardened-disclosure-lgpd-and-8-area-classification: backlog
+  2-4-client-profiles-table-returning-client-lookup-with-dynamic-context-injection: backlog
+  epic-2-retrospective: optional
+
+  # Epic 3: Structured Data Extraction & Client Profiles
+  epic-3: backlog
+  3-1-build-sw-2-save-client-info-sub-workflow-standalone-manually-invocable: backlog
+  3-2-wire-sw-2-as-agent-tool-update-prompt-for-data-extraction-and-confirmation-end-to-end-validation: backlog
+  epic-3-retrospective: optional
+
+  # Epic 4: Lead Qualification & Human Handoff
+  epic-4: backlog
+  4-1-build-sw-3-lead-qualification-sub-workflow-deterministic-scoring: backlog
+  4-2-author-handoff-composer-v1-build-sw-4-handoff-flow-notification-side: backlog
+  4-3-dual-entry-path-telegram-routing-sw-4-accept-decline-decision-branches: backlog
+  4-4-build-sw-5-follow-up-relay-wire-sw-4-info-decision-branch: backlog
+  4-5-wire-qualify-lead-request-human-handoff-as-agent-tools-update-prompt-journey-1-validation: backlog
+  epic-4-retrospective: optional
+
+  # Epic 5: Security Guardrails & Rate Limiting
+  epic-5: backlog
+  5-1-redis-rate-limiting-burst-daily-before-sanitization: backlog
+  5-2-input-guardrails-node-jailbreak-topical-pii-in-input-detection: backlog
+  5-3-output-guardrails-node-pii-in-output-legal-advice-patterns-with-fallback-rewrite: backlog
+  5-4-session-isolation-verification-under-parallel-conversations: backlog
+  epic-5-retrospective: optional
+
+  # Epic 6: Error Handling, Analytics & Forensic Audit Trail
+  epic-6: backlog
+  6-1-chat-analytics-table-sw-7-analytics-logger-fire-and-forget-query-documentation: backlog
+  6-2-wire-sw-7-fire-and-forget-calls-throughout-every-existing-workflow: backlog
+  6-3-sw-6-error-handler-with-severity-routing-threshold-based-ops-alerting: backlog
+  6-4-llm-failover-retry-policies-on-all-external-calls-redis-idempotency: backlog
+  epic-6-retrospective: optional
+
+  # Epic 7: Voice Modality (STT + TTS + Media Handling)
+  epic-7: backlog
+  7-1-build-sw-1-media-processor-voice-transcription-image-document-detection-standalone: backlog
+  7-2-wire-sw-1-into-layer-2-media-processing-with-message-type-routing: backlog
+  7-3-comadre-tts-in-layer-6-with-modality-mirroring-end-to-end-voice-validation-degradation-tests: backlog
+  epic-7-retrospective: optional
+
+  # Epic 8: Unqualified Lead Library + WhatsApp Channel
+  epic-8: backlog
+  8-1-static-responses-library-wire-into-unqualified-and-decline-paths: backlog
+  8-2-whatsapp-ingestion-via-evolution-api-webhook-payload-normalization-idempotency: backlog
+  8-3-whatsapp-output-end-to-end-journey-1-on-whatsapp-journey-2-validation: backlog
+  epic-8-retrospective: optional
+
+  # Epic 9: Offline Refinement Toolbox (Pre-Launch Cycles 1-6)
+  epic-9: backlog
+  9-1-staging-tables-refinement-environment-database-isolation: backlog
+  9-2-seed-refinement-content-directories-golden-dataset-red-team-synthetic-human-test: backlog
+  9-3-build-sw-9-audit-bundle-exporter-with-pii-sanitization-code-node: backlog
+  9-4-build-sw-8-weekly-report-generator-metric-threshold-alerting-attorney-misclassification-flag: backlog
+  9-5-execute-cycle-5-golden-regression-cycle-6-adversarial-red-team-in-claude-code: backlog
+  9-6-execute-cycles-1-4-synthetic-chatbot-vs-chatbot-semi-manual-internal-human-tests-model-human-refinement: backlog
+  epic-9-retrospective: optional
+
+  # Epic 10: Launch Gate, Compliance Automation & Production Activation
+  epic-10: backlog
+  10-1-build-sw-11-retention-sub-workflow-nightly-automated-retention: backlog
+  10-2-right-to-erasure-operator-procedure-48h-sla-verification: backlog
+  10-3-cycle-7-attorney-formal-review-human-test-launch-gate-target-criteria-4-and-5: backlog
+  10-4-groq-zero-retention-validation-compliance-checklist-launch-gate-criterion-6: backlog
+  10-5-launch-gate-validation-production-workflow-cloning-activation-ceremony: backlog
+  epic-10-retrospective: optional
+
+  # Epic 11: Template Export, Deployment Guide & Case Study
+  epic-11: backlog
+  11-1-template-packaging-workflow-json-deployment-documentation-finalized-prompts-sql-bundle: backlog
+  11-2-refinement-log-consolidation-case-study-narrative-readme: backlog
+  11-3-template-deployment-dry-run-8h-nfr40-validation: backlog
+  epic-11-retrospective: optional
