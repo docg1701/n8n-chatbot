@@ -1,6 +1,6 @@
 # Story 1.2: Credential, environment variable, and Telegram group bootstrap
 
-Status: ready-for-dev
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -222,28 +222,28 @@ Story 1.1 left the n8n Credentials list and workflow canvas **empty**. Story 1.2
   - [ ] Confirm the Credentials list contains exactly the 7 committed names from Tasks 2–6 — no more, no fewer
 
 - [ ] **Task 13 — Author `docs/credentials-checklist.md` and commit (AC: 6)**
-  - [ ] Create `docs/credentials-checklist.md` in the n8n-chatbot repo
-  - [ ] Contents (English; zero secret values):
+  - [x] Create `docs/credentials-checklist.md` in the n8n-chatbot repo
+  - [x] Contents (English; zero secret values):
     - Short intro: "This checklist lists the 8 locked credential names used by the template. A new firm importing the workflow recreates these credentials with their own values; the names stay identical so the workflow does not need to change."
     - A table or itemized list covering all 8 names in the committed order from Architecture §Credential Naming: `telegram_bot_refinement`, `telegram_bot_production`, `groq_free`, `groq_paid`, `comadre_tts`, `postgres_main`, `redis_main`, `evolution_api`
     - For each entry: committed name (monospace), n8n credential type, one-sentence purpose, step-by-step creation instructions that reference where the value comes from (BotFather, Groq console, Comadre `.env`, Docker Swarm secret, etc.)
     - `evolution_api` row is marked **"Reserved — created in Epic 8 Story 8.2"** with a one-sentence explanation (cluster-only service; mini does not ship it)
     - `comadre_tts` row includes a one-line "Known follow-up" note recommending key rotation at the moment of registration
     - Explicit NFR9 reminder: no credential value ever enters a workflow field, Code node, log, export, or chat window
-  - [ ] Language: English (per `CLAUDE.md` and Architecture §Language Policy)
-  - [ ] Commit: `docs/credentials-checklist.md`; imperative subject under 72 chars (suggestion: `Document locked credential checklist for template import`)
+  - [x] Language: English (per `CLAUDE.md` and Architecture §Language Policy)
+  - [ ] Commit: `docs/credentials-checklist.md`; imperative subject under 72 chars (suggestion: `Document locked credential checklist for template import`) — **pending operator approval; file authored on disk**
 
 - [ ] **Task 14 — Author `docs/environment-variables.md` and commit (AC: 7)**
-  - [ ] Create `docs/environment-variables.md` in the n8n-chatbot repo
-  - [ ] Contents (English; zero secret values):
+  - [x] Create `docs/environment-variables.md` in the n8n-chatbot repo
+  - [x] Contents (English; zero secret values):
     - Short intro: "This document lists the 11 locked environment variables used by the template. They are injected into the n8n containers via BorgStack's `stack-mini.yml.j2` template and read from workflow nodes via `{{ $env.VAR_NAME }}` expressions (requires `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`, already set by BorgStack)."
     - A table covering all 11 names in the committed order from Architecture §Environment Variable Naming
     - For each entry: exact name (monospace), type (integer / string / model identifier / negative integer / etc.), default value for this firm (Maruzza), per-firm tuning notes, refinement-vs-production notes
     - `ENVIRONMENT` row: explicit note that it is `refinement` during Epic 1–9 and flipped to `production` at Epic 10 Launch Gate (credentials `telegram_bot_refinement` / `telegram_bot_production` follow the same split; cross-reference to `credentials-checklist.md`)
     - `HANDOFF_GROUP_CHAT_ID` / `OPS_GROUP_CHAT_ID` rows: negative integer format; must be distinct (AR38); creation method documented briefly
     - Operational note at the bottom: "To add a new env var to the template, edit `stack-mini.yml.j2` environment blocks for all three n8n services (editor, webhook, worker), redeploy, and update this file."
-  - [ ] Language: English
-  - [ ] Commit: `docs/environment-variables.md`; imperative subject under 72 chars (suggestion: `Document locked environment variables for template import`)
+  - [x] Language: English
+  - [ ] Commit: `docs/environment-variables.md`; imperative subject under 72 chars (suggestion: `Document locked environment variables for template import`) — **pending operator approval; file authored on disk**
 
 ## Dev Notes
 
@@ -419,16 +419,55 @@ All technical details cite source paths and sections:
 
 ### Agent Model Used
 
-{{agent_model_name_version}}
+Claude Opus 4.6 (1M context) — `claude-opus-4-6[1m]`
 
 ### Debug Log References
 
+- None yet. Operator tasks (1–12) execute live in BotFather, n8n editor, BorgStack IaC, and Telegram; their evidence will land here (or in Completion Notes) once executed.
+
 ### Completion Notes List
 
+**2026-04-13 — Agent-authored documentation complete; operator tasks pending.**
+
+Story 1.2 splits cleanly into two execution surfaces:
+
+1. **Agent-authored (done in this session):**
+   - `docs/credentials-checklist.md` written. Lists all 8 locked credential names in committed order, each with n8n credential type, one-sentence purpose, and step-by-step creation instructions referencing where values come from (BotFather / Groq console / Comadre `.env` / Docker Swarm secret), never the values themselves. `evolution_api` row explicitly marked reserved for Epic 8 Story 8.2 with availability-gate justification (cluster-only service not shipped by `borgstack-mini`). `comadre_tts` row carries a neutral "Known follow-up" note on the optional rotation window per the Story 1.1 review follow-up. English; zero secret values (AC6).
+   - `docs/environment-variables.md` written. Lists all 11 locked env vars in committed order, each with type, Maruzza default, per-firm tuning note, and refinement-vs-production notes where applicable. `ENVIRONMENT` row flags the Epic 10 Launch Gate flip and cross-references the matching `telegram_bot_refinement` → `telegram_bot_production` credential split. `HANDOFF_GROUP_CHAT_ID` / `OPS_GROUP_CHAT_ID` rows document negative-integer Telegram-group convention (including `-100` supergroup prefix) and the AR38 distinctness constraint. Operational notes at the bottom cover the "edit all three n8n services" rule for adding new env vars. English; zero secret values (AC7).
+   - Neither file has been committed to Git. The commit step is flagged for operator approval before it runs (system policy: commits require explicit user request).
+
+2. **Operator-executed (Galvani, pending — Tasks 1–12):**
+   - Task 1: create refinement Telegram bot via `@BotFather`; reserve a distinct production bot identity; both tokens in password manager (AC1).
+   - Task 2: register `telegram_bot_refinement` and `telegram_bot_production` in n8n with exact names; `getMe` probes green.
+   - Task 3: register `groq_free` and `groq_paid` as OpenAI credentials with base URL override `https://api.groq.com/openai/v1`; `GET /v1/models` probes green (AC2).
+   - Task 4: register `comadre_tts` as Header Auth with `Authorization: Bearer <key>`; `POST /v1/audio/speech` probe returns OGG Opus; optional key rotation per the Story 1.1 follow-up (AC2).
+   - Task 5: register `postgres_main` (host `postgresql`, port 5432, db `n8n_db`, user `n8n_user`) with password from `vault_n8n_db_password`; Test step green (AC2).
+   - Task 6: register `redis_main` (host `redis`, port 6379, db 0) with password from `vault_redis_password`; `SET/GET` probe in a single run per the Story 1.1 TTL-race lesson (AC2).
+   - Task 7: confirm the Credentials list contains exactly 7 entries with no `evolution_api` stub (AC2).
+   - Task 8: create two distinct private Telegram groups (`Maruzza — Handoff Leads`, `Maruzza — Ops Alerts`), add the refinement bot with post permission, capture negative-integer `chat_id`s using any of methods A/B/C in the task; confirm the two IDs differ (AC4, AC5).
+   - Task 9: append the 11 chatbot env vars to all three n8n service `environment:` blocks in `~/dev/borgstack/templates/stack-mini.yml.j2` (editor / webhook / worker); redeploy via Ansible; verify via `docker exec … env | grep` and `docker service ls` (AC3).
+   - Task 10: build `_scratch_verify-bootstrap` workflow on empty canvas with Manual Trigger → Set node echoing all 11 `$env.*` values → probes for `postgres_main`, `redis_main`, `groq_free`, `comadre_tts` → Telegram messages to both groups to confirm the chat IDs route correctly (AC3, AC8).
+   - Task 11: `docker service update --force` on all three n8n services; re-run `_scratch_verify-bootstrap`; confirm env values persist across restart (AC3).
+   - Task 12: delete `_scratch_verify-bootstrap`; confirm Workflows list is empty and Credentials list has exactly 7 entries (AC8).
+   - When Tasks 1–12 are executed, record evidence (timestamps, probe outcomes, chat-id capture method, restart verification result) either here in Completion Notes or in a separate debug log reference, and check off the corresponding subtasks. Only then does the story transition to `review`.
+
+**Secret-handling posture for this session:** no secret values were read, echoed, or written by the agent. Doc files contain names and procedures only; the `~/dev/comadre/.env`, `~/dev/borgstack/inventory/mini/group_vars/all/vault.yml`, and any BotFather / Groq / Swarm-secret values are handled exclusively by Galvani during operator execution.
+
 ### File List
+
+- `docs/credentials-checklist.md` (new; agent-authored in this session; not yet committed)
+- `docs/environment-variables.md` (new; agent-authored in this session; not yet committed)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (updated: `1-2-…` status `ready-for-dev` → `in-progress`; `last_updated` annotation)
+- `_bmad-output/implementation-artifacts/1-2-credential-environment-variable-and-telegram-group-bootstrap.md` (this story file — Status, Dev Agent Record, File List, Change Log updated per workflow-permitted sections)
+
+Expected additions when Galvani executes operator tasks (tracked outside the n8n-chatbot repo, recorded here for traceability):
+
+- `~/dev/borgstack/templates/stack-mini.yml.j2` — +11 env var lines appended to each of the three n8n service `environment:` blocks (Task 9). Operator commit inside `~/dev/borgstack`, not in this repo.
+- (Optional) `~/dev/borgstack/inventory/mini/group_vars/all/main.yml` — if the operator extracts non-secret chatbot env values into an Ansible dict (Task 9 alternative path).
 
 ## Change Log
 
 | Date | Change | Author |
 |---|---|---|
 | 2026-04-13 | Story 1.2 drafted from Epic 1 AC block; Story 1.1 learnings incorporated; BorgStack IaC ground truth cross-referenced for env var injection mechanism. Status → `ready-for-dev`. | Claude Opus 4.6 |
+| 2026-04-13 | Agent-authored `docs/credentials-checklist.md` (AC6) and `docs/environment-variables.md` (AC7) from the story's committed names and architecture anchors; Task 13 / 14 authoring subtasks checked off; commit subtasks deferred pending operator approval; sprint status → `in-progress`; Tasks 1–12 pending operator execution. | Claude Opus 4.6 (1M context) |
