@@ -160,7 +160,7 @@ This project has **no UX Design document** — the user-facing surface is Telegr
 **Scalability**
 
 - **NFR20**: The system supports current volume of ~100 conversations/day with at least 3x headroom (300 conversations/day) without cost increase or architectural change, operating within the free tiers of external services.
-- **NFR21**: The n8n workflow cannot consume more than 20% of CPU or 30% of RAM on BorgStack-mini under normal load, guaranteeing headroom for the other stack services (PostgreSQL, Redis, Caddy, Authelia, Evolution API, Homer, lldap).
+- **NFR21**: The n8n workflow cannot consume more than 20% of CPU or 30% of RAM on borgstack-mini under normal load, guaranteeing headroom for the other stack services (PostgreSQL, Redis, Caddy, Cloudflared, Authelia, Homer, lldap). Evolution API is not part of borgstack-mini and is not counted in this budget; when Epic 8 triggers the mini → cluster swap, the budget is re-evaluated against the cluster's larger footprint.
 - **NFR22**: When Groq free tier limits are reached, the system automatically scales to paid credits on the same provider without requiring code or workflow changes; the transition happens by credentials configuration, not by reengineering.
 - **NFR23**: The `chat_analytics` table implements appropriate indexes for typical queries (by session_id, by date, by telegram_id, by status) and does not degrade insert performance as it grows. Partitioning or archival policy triggers automatically per retention.
 
@@ -212,10 +212,10 @@ These architectural requirements from `architecture.md` are not numbered as FR/N
 
 **Foundation & Platform (bootstrap prerequisites — before any workflow construction)**
 
-- **AR1 (Bootstrap Checklist)**: A 14-step infrastructure verification must be executed once before workflow construction begins: verify BorgStack-mini health at 10.10.10.205, verify n8n version ≥ 2.15.1, verify `N8N_ENCRYPTION_KEY` is persistent and backed up out-of-band, verify Comadre at 10.10.10.207 returns audio on `/v1/audio/speech` with `voice=kokoro/pm_santa`, create the refinement Telegram bot via BotFather, defer production bot, create credentials (`groq_free`, `groq_paid`, `comadre_tts`, `postgres_main`, `redis_main`, `evolution_api`), run SQL init files against `postgres_main`, create the private handoff Telegram group and store `HANDOFF_GROUP_CHAT_ID` as env var, create empty main workflow and 9 empty sub-workflows with placeholder Manual Trigger nodes. (Architecture §Starter Template & Foundation)
+- **AR1 (Bootstrap Checklist)**: A 14-step infrastructure verification must be executed once before workflow construction begins: verify borgstack-mini health at 10.10.10.205, verify n8n is running any 2.x release, verify the `n8n_encryption_key` Docker Swarm secret exists and its source-of-truth in Ansible Vault is encrypted at rest with the vault password backed up out-of-band, verify Comadre at 10.10.10.207 returns audio on `POST https://<comadre-domain>/v1/audio/speech` with `Authorization: Bearer <COMADRE_API_KEY>` and `voice=kokoro/pm_santa`, create the refinement Telegram bot via BotFather, defer production bot, create credentials (`groq_free`, `groq_paid`, `comadre_tts`, `postgres_main` pointing at database `n8n_db`, `redis_main`; the locked `evolution_api` credential is deferred to Epic 8 because Evolution API is not shipped by borgstack-mini), run SQL init files against `postgres_main` (resolving to `n8n_db`), create the private handoff Telegram group and store `HANDOFF_GROUP_CHAT_ID` as env var, create empty main workflow and 9 empty sub-workflows with placeholder Manual Trigger nodes. (Architecture §Starter Template & Foundation)
 - **AR2 (Empty canvas)**: Build the main workflow and all sub-workflows from an empty n8n canvas. Community workflow templates are consulted as reference configurations for specific node settings only, never as structural starting points. (Architecture §Seed decision)
 - **AR3 (Evolution API via HTTP Request)**: All Evolution API integration uses the generic HTTP Request node; do not install the `n8n-nodes-evolution-api` community node. One integration pattern (HTTP Request) for Groq LLM, Groq Whisper, Comadre, and Evolution API.
-- **AR4 (n8n version floor)**: Minimum n8n version 2.15.1 (post CVE-2025-68613 fix floor 1.120.4+). Every exported workflow JSON snapshot is tagged with the n8n version it was exported from.
+- **AR4 (n8n version floor)**: Any n8n **2.x** release. BorgStack pins the n8n image intentionally in `~/dev/borgstack/inventory/shared/images.yml` and upgrades on the operator's cadence; story ACs verify only that the running version is 2.x, never a specific minor. The CVE-2025-68613 fix line (1.120.4+) is the only hard security floor and every 2.x release is above it. Every exported workflow JSON snapshot is tagged with the n8n version it was exported from at the time of export.
 
 **Workflow Topology & Runtime Surface**
 
@@ -457,45 +457,46 @@ Execute the 14-step Bootstrap Checklist (infrastructure verification, credential
 ### Story 1.1: Infrastructure verification & n8n platform pinning
 
 As an operator (Galvani),
-I want to verify BorgStack-mini is healthy and n8n is pinned at the minimum required version,
-So that I have a documented baseline before any workflow construction begins and I know the platform is reproducible for future template deployments.
+I want to verify borgstack-mini is healthy and that n8n is running a 2.x release,
+So that I have a documented baseline before any workflow construction begins and I know the platform is reproducible for future template deployments. Evolution API is explicitly out of scope for this story — it is not part of borgstack-mini and its verification belongs to Epic 8's mini → cluster swap prefix.
 
 **Acceptance Criteria:**
 
-**Given** BorgStack-mini is deployed at 10.10.10.205
-**When** I open the n8n editor via its configured URL (through Caddy + Cloudflare Tunnel)
+**Given** borgstack-mini is deployed at `10.10.10.205`
+**When** I open the n8n editor at its configured URL (the `mini_n8n_domain` in `~/dev/borgstack/inventory/mini/group_vars/all/main.yml`, routed through Cloudflare Tunnel + Caddy)
 **Then** the editor loads successfully over HTTPS
-**And** the n8n version displayed in Settings is ≥ 2.15.1 (AR4)
-**And** if the version is below 2.15.1, the BorgStack n8n container is upgraded per BorgStack upgrade procedure before proceeding
+**And** the n8n version displayed in Settings is a **2.x** release (AR4) — do not demand a specific minor; BorgStack pins the n8n image in `~/dev/borgstack/inventory/shared/images.yml` and the operator upgrades on an independent cadence, so any 2.x is acceptable
 
-**Given** n8n is running in queue mode
-**When** I execute a Postgres node manual test run against the `chatbot` database (or per BorgStack conventions)
-**Then** the connection succeeds
-**And** pgvector extension is present (`SELECT extname FROM pg_extension WHERE extname='vector'` returns one row)
+**Given** n8n is running in queue mode (editor + webhook + worker)
+**When** I create a temporary verification workflow with a Postgres node bound to a disposable ad-hoc credential pointing at borgstack-mini's Postgres (host `postgresql`, port `5432`, database `n8n_db`, user `n8n_user`, password from the `n8n_db_password` Docker Swarm secret — do **not** use the locked credential name `postgres_main`, which Story 1.2 owns)
+**Then** the connection succeeds and a manual execution of `SELECT 1` returns a row
+**And** a second manual execution of `SELECT extname FROM pg_extension WHERE extname='vector'` against `n8n_db` returns exactly one row, confirming the `pgvector` extension that borgstack-mini's init script provisioned at container init (`~/dev/borgstack/config/postgresql/init-databases-mini.sh` line with `CREATE EXTENSION IF NOT EXISTS vector`) is present and usable
 
-**Given** Redis is part of BorgStack-mini
-**When** I execute a Redis node manual test run performing a `SET/GET` roundtrip on a throwaway key
-**Then** the operation succeeds and the value is correctly read back
+**Given** Redis is part of borgstack-mini
+**When** I create a temporary verification workflow with a Redis node bound to a disposable ad-hoc credential (host `redis`, port `6379`, db `0`, password from the `redis_password` Docker Swarm secret — do **not** use the locked credential name `redis_main`) that performs `SET verify:infra "ok" EX 60` followed by `GET verify:infra`
+**Then** both operations succeed, `GET` returns `"ok"`, and the test key expires in 60 s so no residual state remains
 
-**Given** the `N8N_ENCRYPTION_KEY` environment variable is supposed to be set for the BorgStack n8n container
-**When** I inspect the container's environment via the BorgStack operator procedure
-**Then** `N8N_ENCRYPTION_KEY` is present as a non-empty, high-entropy value
-**And** the key is backed up out-of-band to the firm's encrypted backup location (never in Git)
-**And** the backup location reference is documented in `docs/infra-verification.md` (reference only, never the key value)
+**Given** borgstack-mini manages the n8n encryption key as a Docker Swarm external secret (`n8n_encryption_key` declared in `~/dev/borgstack/templates/stack-mini.yml.j2`, mounted inside the n8n containers at `/run/secrets/n8n_encryption_key` via the `N8N_ENCRYPTION_KEY_FILE` env var)
+**When** I confirm `docker secret ls` on `10.10.10.205` lists `n8n_encryption_key`, and I confirm that the source-of-truth value lives in `~/dev/borgstack/inventory/mini/group_vars/all/vault.yml` which is Ansible Vault-encrypted
+**Then** the secret is present in Swarm, the Ansible Vault file is encrypted at rest (the first line starts with `$ANSIBLE_VAULT;1.1;AES256` or similar — never plaintext), and the Ansible Vault password itself is stored in the firm's out-of-band encrypted backup location
+**And** `docs/infra-verification.md` records a **reference-only** pointer to where the Ansible Vault password lives (e.g., "stored in the firm's password manager under entry X"), never the key or password value itself
+**And** no n8n workflow, Code node, or exported JSON ever reads or inlines the encryption key value
 
-**Given** Comadre is deployed at 10.10.10.207
-**When** I execute an HTTP Request node against `http://10.10.10.207:8000/v1/audio/speech` with a minimal Brazilian Portuguese test text and `voice=kokoro/pm_santa`
-**Then** the response returns audio binary with HTTP 200
-**And** the audio plays back as valid Brazilian Portuguese speech
-
-**Given** Evolution API is part of the BorgStack install
-**When** I call its health/status endpoint from n8n via HTTP Request
-**Then** the endpoint responds successfully (WhatsApp connection itself happens in Epic 8, not here)
+**Given** Comadre is deployed at `10.10.10.207` (separate from BorgStack, source at `~/dev/comadre`) and runs its own Caddy reverse proxy on ports 80/443
+**When** I create a temporary verification workflow with an HTTP Request node issuing `POST https://<comadre-domain>/v1/audio/speech` (or `https://10.10.10.207/v1/audio/speech` with SSL verification disabled if Comadre is using its default self-signed cert), with header `Authorization: Bearer <COMADRE_API_KEY>` and JSON body `{"input": "Olá, teste de verificação de infraestrutura.", "voice": "kokoro/pm_santa"}`
+**Then** the response returns HTTP 200 with an audio binary in the body
+**And** I save the binary as `.ogg` (Comadre's default output is OGG Opus) and play it back locally — the playback is valid Brazilian Portuguese speech in the `kokoro/pm_santa` (neural male) voice
+**Note:** use an ad-hoc `COMADRE_API_KEY` value here; do not create the locked `comadre_tts` credential, which Story 1.2 owns
 
 **Given** all verification steps above are green
 **When** I author and commit `docs/infra-verification.md`
-**Then** the document records timestamped verification results, n8n version, Postgres/Redis/Comadre/Evolution API status, and the `N8N_ENCRYPTION_KEY` backup location reference
-**And** FR41 (credential encryption at rest) is architecturally satisfied — the encryption key exists, is persistent, and is recoverable
+**Then** the document records timestamped verification results (ISO 8601 with `-03:00` offset), the observed n8n version string (2.x confirmed), Postgres + `pgvector` confirmation against `n8n_db`, Redis SET/GET roundtrip confirmation, `n8n_encryption_key` Docker secret confirmation plus the reference-only pointer to the Ansible Vault password backup location, and Comadre HTTP 200 + playback confirmation
+**And** the document is in English (per project language policy) and contains **zero** secret values
+**And** FR41 (credential encryption at rest) is architecturally satisfied — the encryption key exists in Swarm, its source-of-truth is encrypted in Ansible Vault, and it is recoverable out-of-band
+
+**Given** all verification workflows were intentionally temporary
+**When** verification is complete and `docs/infra-verification.md` is committed
+**Then** every temporary verification workflow is deleted from the n8n editor and every ad-hoc credential used for verification is deleted, so Story 1.2 begins with a clean credentials list and an empty workflow canvas
 
 ---
 
@@ -516,7 +517,8 @@ So that every future workflow story can reference credentials and env vars by th
 **When** I register credentials in n8n Settings → Credentials
 **Then** a credential named exactly `telegram_bot_refinement` is created with the refinement token
 **And** a credential named exactly `telegram_bot_production` is created with the production token (reserved — `main-chatbot-production` will consume it later in Epic 10)
-**And** credentials named exactly `groq_free`, `groq_paid`, `comadre_tts`, `postgres_main`, `redis_main`, `evolution_api` are registered with their respective values (AR41)
+**And** credentials named exactly `groq_free`, `groq_paid`, `comadre_tts` (with mandatory `Authorization: Bearer <COMADRE_API_KEY>` header, per `~/dev/comadre/compose.yaml`), `postgres_main` (pointing at database `n8n_db`, user `n8n_user`, host `postgresql`, port `5432` on borgstack-mini's internal network), and `redis_main` (host `redis`, port `6379`, db `0`) are registered with their respective values (AR41)
+**And** the locked credential `evolution_api` is **NOT** created in this story — Evolution API is not part of borgstack-mini, and its credential is created as a prefix step in Epic 8 (Story 8.2) alongside the mini → cluster swap that first makes Evolution API reachable
 **And** no credential value appears in plain text anywhere in workflows, logs, backups, or exports (NFR9)
 
 **Given** the locked env var list from AR42
@@ -533,7 +535,7 @@ So that every future workflow story can reference credentials and env vars by th
 
 **Given** credentials and env vars are committed to n8n
 **When** I author `docs/credentials-checklist.md` and `docs/environment-variables.md`
-**Then** `docs/credentials-checklist.md` lists all 8 locked credential names with type, purpose, and creation instructions — never actual values
+**Then** `docs/credentials-checklist.md` lists all 8 locked credential names (`telegram_bot_refinement`, `telegram_bot_production`, `groq_free`, `groq_paid`, `comadre_tts`, `postgres_main`, `redis_main`, `evolution_api`) with type, purpose, and creation instructions — never actual values. The `evolution_api` entry explicitly notes it is reserved for Epic 8 and not created in Story 1.2
 **And** `docs/environment-variables.md` lists all 11 locked env vars with defaults, per-firm tuning notes, and refinement-vs-production differences explicitly flagged for `ENVIRONMENT` and the two Telegram bot credentials
 **And** both files are committed to the repo in English (AR39)
 
@@ -2015,9 +2017,9 @@ So that the interaction feels natural on mobile (I can listen to the reply witho
 
 **Given** the TTS branch needs to call Comadre
 **When** I add an HTTP Request node named `Call Comadre TTS`
-**Then** the node POSTs to `http://10.10.10.207:8000/v1/audio/speech` (AR and architecture external-integration table)
-**And** the credential is `comadre_tts` (if auth is required)
-**And** the body is JSON: `{ "model": "kokoro", "input": "{{ $('Triage Agent').item.json.response_text || final agent text }}", "voice": "{{ $env.TTS_VOICE }}" }` (TTS_VOICE = `kokoro/pm_santa` per AR42)
+**Then** the node POSTs to `https://<comadre-domain>/v1/audio/speech` via Comadre's own Caddy reverse proxy on `10.10.10.207` (disable SSL verification on the HTTP Request node if Comadre is using its default self-signed cert — see `~/dev/comadre/deploy/caddy/Caddyfile`)
+**And** the credential is `comadre_tts` (mandatory — Comadre requires `Authorization: Bearer <COMADRE_API_KEY>`, enforced by `~/dev/comadre/compose.yaml` at service start)
+**And** the body is JSON: `{ "input": "{{ $('Triage Agent').item.json.response_text || final agent text }}", "voice": "{{ $env.TTS_VOICE }}" }` (TTS_VOICE = `kokoro/pm_santa` per AR42); response format default is OGG Opus
 **And** response format is `File` so n8n stores the audio binary
 **And** `Retry on Fail = true`, `Max Tries = 2`, exponential backoff (NFR34)
 **And** `Continue on Fail = true` (FR44, AR — TTS failure must not crash the conversation; text-only fallback continues)
@@ -2054,7 +2056,7 @@ So that the interaction feels natural on mobile (I can listen to the reply witho
 **And** FR5's "text in → text only" rule is honored
 
 **Given** I need to test Comadre degradation
-**When** I temporarily point `Call Comadre TTS` at an invalid URL (e.g., `http://10.10.10.207:9999/v1/audio/speech`) and send a voice message
+**When** I temporarily point `Call Comadre TTS` at an invalid URL (e.g., `https://10.10.10.207:9999/v1/audio/speech`) and send a voice message
 **Then** the Whisper step succeeds
 **And** the agent responds normally
 **And** `Send Agent Reply via Telegram` sends the text successfully
@@ -2184,9 +2186,20 @@ As a prospective client who prefers WhatsApp,
 I want to message the firm on WhatsApp and have the bot understand me the same way it would on Telegram,
 So that I can contact the firm through the channel I use every day without downloading a new app or learning a new interface.
 
+**Prerequisite — Infrastructure swap or standalone Evolution API deployment:**
+
+Evolution API is **not** part of borgstack-mini. Before any WhatsApp wiring in this story can begin, the operator must make Evolution API reachable from the n8n runtime by one of two paths:
+
+1. **Mini → full cluster swap (preferred).** Stop borgstack-mini on `10.10.10.205` and bring up the full BorgStack cluster on the same host (or on a different host pre-provisioned for the cluster). The cluster ships Evolution API in `~/dev/borgstack/templates/stack-worker-*.yml.j2`. After the swap, n8n, Postgres, Redis, credentials, and the chatbot's existing workflows remain functional (the cluster is a superset of mini); Evolution API becomes a new service on the same `borgstack-network`.
+2. **Standalone Evolution API alongside mini.** Deploy Evolution API as a separate compose stack on a reachable host (Comadre-style separation). Point n8n at it via HTTP Request with the `apikey` header.
+
 **Acceptance Criteria:**
 
-**Given** Evolution API is deployed as part of BorgStack-mini and was health-checked in Epic 1 Story 1.1
+**Given** Evolution API is now reachable from the n8n runtime (via the swap or standalone deploy above)
+**When** I first create the locked `evolution_api` credential in n8n Settings → Credentials (deferred from Epic 1 Story 1.2, finally registered here with its base URL and `apikey` header value)
+**Then** the credential exists with the exact locked name `evolution_api` (AR41) and is readable by downstream HTTP Request nodes
+
+**Given** the `evolution_api` credential now exists
 **When** I configure the Evolution API instance to connect to a test WhatsApp number (via QR code pairing — documented in `docs/evolution-api-setup.md`, to be authored in this story)
 **Then** the test WhatsApp number is paired and Evolution API is in `open` state, able to receive and send messages
 
@@ -2978,7 +2991,7 @@ So that I can reproduce the Maruzza deployment at my own firm by following docum
 **Given** the deployment guide is the primary artifact for a new operator
 **When** I author `docs/deployment-guide.md`
 **Then** the document has these sections:
- — **§1 Prerequisites:** BorgStack-mini deployment (reference to BorgStack docs), n8n version ≥ 2.15.1, Postgres + pgvector + Redis, Caddy + Cloudflare Tunnel, Evolution API instance, Comadre TTS deployment at the firm's internal IP
+ — **§1 Prerequisites:** BorgStack deployment — start on borgstack-mini for Epics 1-7 (`~/dev/borgstack/playbooks/deploy-mini.yml`) and swap to the full BorgStack cluster at Epic 8 for Evolution API (`~/dev/borgstack/playbooks/deploy-all.yml`), or deploy Evolution API standalone alongside mini. Required services: n8n 2.x (queue mode: editor + webhook + worker), PostgreSQL 18 + pgvector (database `n8n_db` provisioned by BorgStack init), Redis, Caddy + Cloudflare Tunnel. Evolution API becomes required only at Epic 8. Comadre TTS is a separate deployment on a reachable host with its own Caddy reverse proxy and mandatory `Authorization: Bearer <COMADRE_API_KEY>` header
  — **§2 Bootstrap Checklist (14 steps):** from Epic 1 Story 1.1/1.2/1.3, reusable by the new firm
  — **§3 SQL Initialization:** run `sql/001-init-client-profiles.sql` through `sql/004-init-staging-tables.sql` in order via `psql`
  — **§4 Credentials Creation:** per `docs/credentials-checklist.md`
@@ -3096,7 +3109,7 @@ So that the "replicable template" promise is proven rather than assumed — and 
 
 **Given** the template package from Story 11.1 is complete and committed
 **When** I prepare a dry-run environment on separate infrastructure (a second BorgStack-mini instance on a separate VM, or a second VPS, or a local Docker Swarm stack that mirrors the BorgStack-mini topology — NOT the production BorgStack-mini where Maruzza's real bot is running)
-**Then** the dry-run environment is provisioned with BorgStack-mini + n8n ≥ 2.15.1 + Postgres + pgvector + Redis + Caddy + Evolution API (with a separate test WhatsApp number) + a reachable Comadre instance (can be the same Comadre at 10.10.10.207 if network-accessible, or a separate instance)
+**Then** the dry-run environment is provisioned with the full BorgStack cluster (required here because the dry-run exercises the WhatsApp path which depends on Evolution API) + n8n 2.x + PostgreSQL 18 + pgvector (database `n8n_db`) + Redis + Caddy + Evolution API (with a separate test WhatsApp number) + a reachable Comadre instance (can be the same Comadre at `10.10.10.207` if network-accessible, or a separate Comadre deployment reachable over HTTPS with its own API key)
 **And** the dry-run environment is cleanly empty — no prior n8n workflows, no pre-seeded database rows, no pre-existing credentials
 
 **Given** I am simulating a new firm operator following the documentation

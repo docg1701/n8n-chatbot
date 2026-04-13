@@ -233,21 +233,40 @@ software scaffold. The architecturally meaningful equivalents are:
 ### Foundation already in place (no scaffolding required)
 
 All orchestration and persistence infrastructure is already running on
-BorgStack-mini at `10.10.10.205`:
+BorgStack-mini at `10.10.10.205`. The mini stack topology is the canonical
+source of truth in `~/dev/borgstack/templates/stack-mini.yml.j2` and ships
+exactly these services:
 
 - n8n (queue mode: editor + webhook + worker)
-- PostgreSQL + pgvector
+- PostgreSQL + pgvector (image `pgvector/pgvector:pg18`, single application
+  database `n8n_db` with user `n8n_user`, `pgvector` extension enabled at
+  container init in `~/dev/borgstack/config/postgresql/init-databases-mini.sh`)
 - Redis
 - Caddy (reverse proxy with TLS termination)
 - Cloudflare Tunnel (secure inbound ingress, no public IP exposure)
-- Evolution API (WhatsApp bridge, ready for the production bot)
 - Authelia + lldap + Homer (not used by this workflow but share the node)
 
-TTS is provided by **Comadre** on a dedicated server at `10.10.10.207`,
-exposing an OpenAI-compatible `/v1/audio/speech` endpoint, default voice
-`kokoro/pm_santa`. Operational LLM and STT are provided by **Groq** at
-`api.groq.com/openai/v1` (free tier first, paid fallback, flat-rate monthly
-alternatives as long-term evolution).
+**Evolution API is NOT on borgstack-mini.** It is a cluster-only service
+(see `~/dev/borgstack/docs/mini-architecture.md`). BorgStack is deployed in
+two modes and both are pre-provisioned: the mini (used for early epics) and
+the full cluster (which ships Evolution API plus Chatwoot, Directus,
+Metabase, SeaweedFS, Backrest, Portainer, etc.). The operator (Galvani)
+brings up the full cluster and takes down the mini when a story first
+requires a cluster-only service. Epic 8 (WhatsApp ingestion via Evolution
+API) is the first planned trigger for this mini → cluster swap and must
+include that swap as a prefix step; earlier epics stay on mini.
+
+TTS is provided by **Comadre** on a dedicated server at `10.10.10.207`.
+Comadre runs its own Caddy reverse proxy on ports 80/443; the OpenAI-
+compatible endpoint `POST /v1/audio/speech` is accessed over **HTTPS** via
+Comadre's configured domain (or directly against `10.10.10.207` with SSL
+verification disabled for self-signed certs). Authentication is **mandatory
+via `Authorization: Bearer <COMADRE_API_KEY>`** — Comadre's compose file
+fails to start without `API_KEY` set (see `~/dev/comadre/compose.yaml`).
+Default voice is `kokoro/pm_santa`; default response format is OGG Opus
+(24 kbps, 16 kHz, mono). Operational LLM and STT are provided by **Groq**
+at `api.groq.com/openai/v1` (free tier first, paid fallback, flat-rate
+monthly alternatives as long-term evolution).
 
 The architecture document will treat BorgStack as a black-box platform and
 specify only the n8n-, database-, and credentials-level contracts this
@@ -255,14 +274,26 @@ workflow depends on.
 
 ### Platform version pinning
 
-- **n8n minimum version:** 2.15.1 (current stable as of 2026-04-10). The
-  project is clearly on n8n 2.x and comfortably past the CVE-2025-68613 fix
-  floor (1.120.4+).
+- **n8n version floor:** any n8n **2.x** release. BorgStack pins the n8n
+  image intentionally in `~/dev/borgstack/inventory/shared/images.yml` and
+  upgrades it on the operator's own cadence; stories and ACs must verify
+  only that the running version is 2.x, never demand a specific minor. The
+  CVE-2025-68613 fix line (1.120.4+) is the only hard security floor, and
+  every 2.x release is above it.
 - **Version tracking:** every workflow JSON exported to
   `exports/workflow-snapshots/` will be tagged with the n8n version it was
-  exported from (satisfies NFR41 — explicit dependency list).
+  exported from at the time of export (satisfies NFR41 — explicit
+  dependency list).
 - **`N8N_ENCRYPTION_KEY`:** mandatory, persistent, and backed up out-of-band.
-  Without this, the entire credentials system is unrecoverable after restart.
+  On BorgStack-mini it is managed as a Docker Swarm external secret named
+  `n8n_encryption_key` (declared in `stack-mini.yml.j2` and mounted at
+  `/run/secrets/n8n_encryption_key` inside the n8n editor, webhook, and
+  worker containers via the `N8N_ENCRYPTION_KEY_FILE` env var). The
+  source-of-truth value lives in the Ansible Vault-encrypted
+  `~/dev/borgstack/inventory/mini/group_vars/all/vault.yml`; the Ansible
+  Vault password must itself be backed up to the operator's out-of-band
+  encrypted backup location. Without the encryption key, every n8n
+  credential becomes unrecoverable after restart.
 
 ### Seed decision — empty canvas, not a community template
 
@@ -309,6 +340,16 @@ recipes only:**
 
 ### Evolution API integration — HTTP Request node, not community node
 
+**Availability note:** Evolution API is **not shipped by borgstack-mini** —
+it is a cluster-only service (see `~/dev/borgstack/templates/stack-mini.yml.j2`
+vs. `stack-worker-*.yml.j2` and `~/dev/borgstack/docs/mini-architecture.md`).
+Epic 1 through Epic 7 run entirely on mini with no Evolution API dependency.
+Epic 8 (WhatsApp ingestion) is the first epic that requires it, and its
+first story must include the mini → cluster swap (or a standalone Evolution
+API deployment alongside mini) as a prefix step before any WhatsApp wiring
+begins. The architectural decision below stands regardless of when Evolution
+API becomes available.
+
 **Decision: use the generic HTTP Request node for all Evolution API
 endpoints. Do not install the `n8n-nodes-evolution-api` community node.**
 
@@ -331,31 +372,62 @@ endpoints. Do not install the `n8n-nodes-evolution-api` community node.**
 
 This is the n8n-project equivalent of the "first implementation story / run
 the create command" that the step's conventional framing expects. Must be
-executed once before any workflow construction begins:
+executed once before any workflow construction begins. All steps run against
+**borgstack-mini** — the mini → cluster swap that Epic 8 triggers does not
+change this list:
 
-1. Verify BorgStack-mini is healthy at 10.10.10.205 — n8n reachable in queue
-   mode, Postgres + pgvector accepting connections, Redis reachable, Caddy
-   + Cloudflare Tunnel serving inbound webhooks over HTTPS, Evolution API
-   instance exists and is WhatsApp-connected.
-2. Verify n8n version ≥ 2.15.1; upgrade BorgStack n8n container if needed.
-   Pin the version in deployment notes.
-3. Verify `N8N_ENCRYPTION_KEY` is set, persistent, and backed up out-of-band.
-4. Verify Comadre is reachable at 10.10.10.207 from BorgStack's internal
-   network and `/v1/audio/speech` with `voice=kokoro/pm_santa` returns audio.
+1. Verify borgstack-mini is healthy at 10.10.10.205 — n8n reachable in queue
+   mode (editor, webhook, worker all up), Postgres + pgvector accepting
+   connections on `postgresql:5432` inside the `borgstack-network`, Redis
+   reachable on `redis:6379`, Caddy + Cloudflare Tunnel serving inbound
+   webhooks over HTTPS at `https://n8n.pixeloddity.org` (or whatever
+   `mini_n8n_domain` is set to in `~/dev/borgstack/inventory/mini/group_vars/all/main.yml`).
+2. Verify n8n is running any 2.x version — do not pin a specific minor.
+   BorgStack's image pin in `~/dev/borgstack/inventory/shared/images.yml`
+   (currently `n8nio/n8n:2.11.3` / `pixeloddity/n8n-worker:2.11.3`, both
+   above the CVE-2025-68613 fix floor 1.120.4+) is managed by the operator
+   on an independent cadence. Do **not** force an upgrade as part of this
+   bootstrap.
+3. Verify the `n8n_encryption_key` Docker Swarm secret exists
+   (`docker secret ls` shows it), that its source-of-truth value is stored
+   in Ansible Vault-encrypted `inventory/mini/group_vars/all/vault.yml`,
+   and that the Ansible Vault password itself is backed up out-of-band to
+   the firm's encrypted backup location. Never read or echo the secret
+   value anywhere in the repo or in n8n workflow fields.
+4. Verify Comadre is reachable from borgstack-mini. Comadre runs its own
+   Caddy reverse proxy on `10.10.10.207` ports 80/443. Call
+   `POST https://<comadre-domain>/v1/audio/speech` (or
+   `https://10.10.10.207/v1/audio/speech` with SSL verification disabled
+   if Comadre is using its default self-signed cert — see
+   `~/dev/comadre/deploy/caddy/Caddyfile`) with header
+   `Authorization: Bearer <COMADRE_API_KEY>`, JSON body
+   `{"input": "<test text>", "voice": "kokoro/pm_santa"}`, and confirm
+   HTTP 200 plus a valid OGG Opus audio binary in the response.
 5. Create the Telegram **refinement** bot via @BotFather; store as n8n
    credential `telegram_bot_refinement`.
 6. (Deferred) Create the Telegram **production** bot as
    `telegram_bot_production` — not activated yet.
 7. Create Groq API credentials `groq_free` and `groq_paid` in n8n.
-8. Create Comadre credential `comadre_tts` (if behind an auth layer).
-9. Create Postgres credential `postgres_main` (database `chatbot` or
-   equivalent per BorgStack conventions).
-10. Create Redis credential `redis_main`.
-11. Create Evolution API credential `evolution_api` (base URL + apikey header).
-12. Run `sql/001-init-tables.sql` against `postgres_main` to create
-    `client_profiles`, `chat_analytics`, `static_responses`, and
-    staging-prefixed refinement tables. Do NOT pre-create `n8n_chat_histories`
-    — the Postgres Chat Memory node auto-creates it on first run.
+8. Create Comadre credential `comadre_tts` with the base URL and the
+   `Authorization: Bearer <COMADRE_API_KEY>` header.
+9. Create Postgres credential `postgres_main` pointing at database
+   `n8n_db` with user `n8n_user` (single application database shipped by
+   borgstack-mini; host `postgresql`, port `5432`, password from Docker
+   Swarm secret `n8n_db_password`).
+10. Create Redis credential `redis_main` (host `redis`, port `6379`, db `0`,
+    password from Docker Swarm secret `redis_password`).
+11. **Deferred to Epic 8.** Evolution API is not part of borgstack-mini
+    (confirmed in `~/dev/borgstack/docs/mini-architecture.md`). Creating
+    the `evolution_api` credential and the Evolution API setup belongs to
+    Epic 8 as a prefix step, alongside the mini → cluster swap that makes
+    Evolution API reachable.
+12. Run `sql/001-init-tables.sql` against `postgres_main` (which resolves
+    to database `n8n_db`) to create `client_profiles`, `chat_analytics`,
+    `static_responses`, and staging-prefixed refinement tables. These
+    coexist in `n8n_db` alongside n8n's own operational tables (the
+    `n8n_*` tables such as `execution_entity`, `credentials_entity`) and
+    alongside `n8n_chat_histories` (auto-created by the Postgres Chat
+    Memory node on first run — do NOT pre-create it).
 13. Create a private Telegram group for handoff notifications; add the
     refinement bot as a member with permission to post; store the group's
     `chat_id` as n8n environment variable `HANDOFF_GROUP_CHAT_ID`.
@@ -414,8 +486,15 @@ in a conventional software project.
 **Database & schema**
 
 - **Single PostgreSQL instance with pgvector**, shared with other BorgStack
-  services on the mini node. Database name: `chatbot` (or per BorgStack
-  conventions during the bootstrap).
+  services on the mini node. Database name: **`n8n_db`** — the single
+  application database that borgstack-mini provisions at init time (see
+  `~/dev/borgstack/config/postgresql/init-databases-mini.sh`). All chatbot
+  tables (`client_profiles`, `chat_analytics`, `static_responses`, the
+  `staging_*` refinement tables, and `n8n_chat_histories` auto-created by
+  the Postgres Chat Memory node) coexist in `n8n_db` alongside n8n's own
+  operational tables. The Postgres image is `pgvector/pgvector:pg18` and
+  the `vector` extension is enabled in `n8n_db` at container init; there
+  is no separate `chatbot` database.
 - **Schema versioning via idempotent numbered SQL files** in `sql/`:
   `001-init-client-profiles.sql`, `002-init-chat-analytics.sql`,
   `003-init-static-responses.sql`, `004-init-staging-tables.sql`. Every
@@ -1382,8 +1461,8 @@ surfaces**, and the "project structure" must describe all four:
    SQL, exports, audit bundles, refinement logs, documentation, case study
 2. **n8n workflows** (runtime objects inside the n8n editor on
    BorgStack-mini)
-3. **PostgreSQL schema** (tables inside the `chatbot` database on
-   BorgStack-mini)
+3. **PostgreSQL schema** (tables inside the `n8n_db` database on
+   borgstack-mini — the single application database BorgStack provisions)
 4. **Redis keyspace** (ephemeral state inside the BorgStack-mini Redis)
 
 External services (Groq, Comadre, Telegram, Evolution API) are not part of
@@ -1751,13 +1830,17 @@ CREATE INDEX IF NOT EXISTS idx_static_responses_area ON static_responses(practic
 | 3 | WhatsApp via Evolution API | `POST /message/*` + webhook `MESSAGES_UPSERT` | HTTP/REST | `evolution_api` (base URL + apikey header) | n8n `Retry on Fail` (exponential, max 3); Evolution API auto-reconnects | CONNECTION_UPDATE event triggers ops-group alert |
 | 4 | Groq LLM (chat) | `https://api.groq.com/openai/v1/chat/completions` | HTTPS OpenAI-compatible | `groq_free` primary, `groq_paid` fallback | n8n `Retry on Fail` (exponential, max 2 per credential) | Automatic credential failover from `groq_free` → `groq_paid`; if both fail, SW-6 CRITICAL |
 | 5 | Groq Whisper (STT) | `https://api.groq.com/openai/v1/audio/transcriptions` | HTTPS multipart upload | `groq_free` primary, `groq_paid` fallback | Same as LLM | Same; if Whisper fails, friendly "please type your message" response (FR45) |
-| 6 | Comadre TTS | `http://10.10.10.207:8000/v1/audio/speech` | HTTP (internal network) OpenAI-compatible | `comadre_tts` | `Retry on Fail` (exponential, max 2) + `Continue on Fail = true` | Text-only response if all retries fail (FR44) |
+| 6 | Comadre TTS | `POST https://<comadre-domain>/v1/audio/speech` (Comadre's own Caddy on `10.10.10.207`; self-signed cert default — disable SSL verification in the HTTP Request node if using default) | HTTPS OpenAI-compatible, **mandatory** `Authorization: Bearer <COMADRE_API_KEY>` header | `comadre_tts` (base URL + Bearer token) | `Retry on Fail` (exponential, max 2) + `Continue on Fail = true` | Text-only response if all retries fail (FR44) |
 
 **Trust boundaries:**
 
-- **Trusted, on-premise:** BorgStack-mini (n8n, Postgres, Redis, Caddy,
-  Cloudflare Tunnel, Evolution API), Comadre (separate dedicated server,
-  internal network).
+- **Trusted, on-premise:** borgstack-mini (n8n editor/webhook/worker,
+  Postgres, Redis, Caddy, Cloudflare Tunnel, Homer, Authelia, lldap) and
+  Comadre (separate dedicated server at `10.10.10.207`, internal network,
+  HTTPS via its own Caddy). Evolution API is not part of borgstack-mini —
+  it joins the trust perimeter only when Epic 8's mini → cluster swap
+  brings up the full BorgStack cluster (where Evolution API ships) or
+  when Evolution API is deployed standalone alongside mini.
 - **External, conditionally trusted:** Groq (requires zero-retention
   contract validation pre-Launch-Gate — NFR7).
 - **External, platform-trusted:** Telegram (signed requests, bot token),
@@ -2033,7 +2116,7 @@ CREATE INDEX IF NOT EXISTS idx_static_responses_area ON static_responses(practic
 ### Coherence Validation — PASSED
 
 - **Decision compatibility:** All technology choices work together without
-  conflicts. n8n 2.15.1 + PostgreSQL + pgvector + Redis + Groq +
+  conflicts. n8n 2.x + PostgreSQL 18 + pgvector + Redis 8 + Groq +
   Comadre is a fully compatible stack; no version conflicts; all
   integrations are either native n8n nodes or HTTP-over-OpenAI-compatible.
 - **Pattern consistency:** snake_case in Postgres → internal message

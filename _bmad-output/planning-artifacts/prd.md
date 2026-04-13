@@ -128,7 +128,7 @@ Two users, each with distinct criteria:
 - **Error rate** — ≤ 1% of conversations reach the error-handling workflow. Measured automatically.
 - **Fallback resilience** — 100% successful failover when the primary LLM (Groq free) returns 429 or 5xx. Validated by a monthly injected test.
 - **Security** — 100% pass on the adversarial red-team battery executed monthly. Zero system-prompt leaks, PII leaks, or fabricated legal advice in audit.
-- **BorgStack resource budget** — the workflow cannot consume more than 20% of CPU or 30% of RAM on BorgStack-mini under normal load, preserving headroom for the other services (PostgreSQL, Evolution API, Caddy, Authelia, etc.) sharing the same node.
+- **BorgStack resource budget** — the workflow cannot consume more than 20% of CPU or 30% of RAM on borgstack-mini under normal load, preserving headroom for the other services (PostgreSQL, Redis, Caddy, Cloudflared, Authelia, lldap, Homer) sharing the same node. Evolution API is not on borgstack-mini — it ships only in the full cluster, which replaces the mini when Epic 8 triggers the WhatsApp ingestion swap.
 
 ### Measurable Outcomes
 
@@ -490,9 +490,9 @@ This section describes the macro architecture of the n8n workflow that will be b
 
 The system has three infrastructure domains, each with clear responsibilities:
 
-**Domain 1 — BorgStack-mini (orchestration and storage).** Location: `10.10.10.205`, Docker Swarm single-node. Responsibilities: n8n (queue mode: editor + webhook + worker) runs the workflow; PostgreSQL + pgvector holds chat memory, client profiles, analytics, audit logs; Redis handles rate limiting, cache, counters; Caddy is the reverse proxy with TLS termination; Cloudflare tunnel exposes the webhook securely without a public IP; Evolution API bridges WhatsApp. **BorgStack does not run model inference.** No LLM, no Whisper, no local TTS engine. It is exclusively orchestration and persistence.
+**Domain 1 — borgstack-mini (orchestration and storage).** Location: `10.10.10.205`, Docker Swarm single-node. Responsibilities: n8n (queue mode: editor + webhook + worker) runs the workflow; PostgreSQL + pgvector (database `n8n_db`) holds chat memory, client profiles, analytics, audit logs; Redis handles rate limiting, cache, counters; Caddy is the reverse proxy with TLS termination; Cloudflare tunnel exposes the webhook securely without a public IP. **borgstack-mini does not run model inference and does not ship Evolution API.** Evolution API is cluster-only; when Epic 8 (WhatsApp ingestion) begins, the operator swaps borgstack-mini for the full cluster (or deploys Evolution API standalone alongside mini). No LLM, no Whisper, no local TTS engine runs on the mini — it is exclusively orchestration and persistence.
 
-**Domain 2 — Comadre (dedicated TTS).** Location: `10.10.10.207`. Dedicated TTS server with optimized hardware. Exposes an OpenAI-compatible endpoint at `/v1/audio/speech`. Default voice `kokoro/pm_santa`. Accessed over the internal network from BorgStack.
+**Domain 2 — Comadre (dedicated TTS).** Location: `10.10.10.207`. Dedicated TTS server with optimized hardware, separate deployment from BorgStack. Runs its own Caddy reverse proxy on ports 80/443 and exposes an OpenAI-compatible endpoint at `POST /v1/audio/speech` over **HTTPS**. Authentication is **mandatory** via `Authorization: Bearer <COMADRE_API_KEY>`. Default voice `kokoro/pm_santa`. Default response format OGG Opus (24 kbps, 16 kHz, mono). Accessed from borgstack-mini's n8n over the internal network.
 
 **Domain 3 — External cloud services.** Groq (`api.groq.com/openai/v1`) — operational LLM (7-12B multilingual model) plus Whisper Large v3 Turbo for STT. Optional fallback — OpenRouter, Mistral, or another OpenAI-compatible provider, accessed via HTTP Request node with configurable base URL.
 
@@ -630,7 +630,7 @@ Each layer is a set of nodes wired in sequence inside the main workflow. Sub-wor
 | **WhatsApp via Evolution API** | Manual webhook | Webhook node + HTTP Request (or community `n8n-nodes-evolution-api`) | Normalize payload to unified schema; evaluate community node for code savings |
 | **Groq LLM (chat)** | HTTP Request with OpenAI-compatible endpoint | HTTP Request node with base URL `https://api.groq.com/openai/v1` | Failover configured via retry + fallback credentials (free → paid) |
 | **Groq Whisper (STT)** | HTTP Request with OpenAI-compatible endpoint | HTTP Request node for `/audio/transcriptions` | Multipart binary upload |
-| **Comadre (TTS)** | HTTP Request with OpenAI-compatible endpoint | HTTP Request node for `http://10.10.10.207:8000/v1/audio/speech` | Continue on Fail = true; fallback to text-only if Comadre is down |
+| **Comadre (TTS)** | HTTPS Request with OpenAI-compatible endpoint | HTTP Request node for `POST https://<comadre-domain>/v1/audio/speech` (Comadre's own Caddy on `10.10.10.207`; disable SSL verification if using default self-signed cert), mandatory `Authorization: Bearer <COMADRE_API_KEY>` header | Continue on Fail = true; fallback to text-only if Comadre is down |
 | **PostgreSQL** | Direct connection | Postgres node (built-in) | All tables in the same schema; `chat_analytics`, `client_profiles`, `n8n_chat_histories` (auto-created by the memory node), `test_scenarios` (staging) |
 | **Redis** | Direct connection | Redis node (built-in) | Rate-limit counters + static response cache |
 
@@ -1016,7 +1016,7 @@ The numerical thresholds for performance, cost, availability, and classification
 ### Scalability
 
 - **NFR20**: The system supports current volume of ~100 conversations/day with at least 3x headroom (300 conversations/day) without cost increase or architectural change, operating within the free tiers of external services.
-- **NFR21**: The n8n workflow cannot consume more than 20% of CPU or 30% of RAM on BorgStack-mini under normal load, guaranteeing headroom for the other stack services (PostgreSQL, Redis, Caddy, Authelia, Evolution API, Homer, lldap).
+- **NFR21**: The n8n workflow cannot consume more than 20% of CPU or 30% of RAM on borgstack-mini under normal load, guaranteeing headroom for the other stack services (PostgreSQL, Redis, Caddy, Cloudflared, Authelia, Homer, lldap). Evolution API is not part of borgstack-mini and is not counted in this budget; when Epic 8 triggers the mini → cluster swap, the NFR21 budget is re-evaluated against the cluster's larger footprint.
 - **NFR22**: When Groq free tier limits are reached, the system automatically scales to paid credits on the same provider without requiring code or workflow changes; the transition happens by credentials configuration, not by reengineering.
 - **NFR23**: The `chat_analytics` table implements appropriate indexes for typical queries (by session_id, by date, by telegram_id, by status) and does not degrade insert performance as it grows. Partitioning or archival policy triggers automatically per retention.
 
