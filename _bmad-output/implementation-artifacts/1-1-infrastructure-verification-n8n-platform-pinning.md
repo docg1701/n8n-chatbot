@@ -1,6 +1,6 @@
 # Story 1.1: Infrastructure verification & n8n platform pinning
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -157,6 +157,45 @@ Evolution API is **explicitly out of scope** for this story — it is not part o
   - [x] In the n8n editor, delete the four temporary workflows created in Tasks 2, 3, 5 (`_scratch_verify-postgres`, `_scratch_verify-redis`, `_scratch_verify-comadre`)
   - [x] Delete the ad-hoc credentials used solely for verification (the temporary Postgres, Redis, and Comadre Bearer credentials) so Story 1.2 starts from an empty credentials list
   - [x] Visually confirm the n8n workflow list and credentials list are clean before moving on to Story 1.2
+
+### Review Findings
+
+Review run: 2026-04-12, three adversarial layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor). Scope: commit `daa11e7` — `docs/infra-verification.md` (+134/-0).
+
+**Decision-needed** (all resolved 2026-04-12 after Galvani confirmed the repo will remain private forever — four disclosure-risk findings dismissed; one structural-ergonomics finding promoted to patch):
+
+- [x] [Review][Decision][Dismissed] Comadre API key on-disk path `/home/galvani/comadre/.env` on a named host (`:74`) — dismissed: repo is private, no public-disclosure risk. Memory `project_repo_visibility.md` applies.
+- [x] [Review][Decision][Dismissed] Paper-note-in-home-safe Vault-password pointer (`:63`) — dismissed: repo is private, pointer specificity is acceptable. Spec's abstracted-form suggestion at AC5 line 52 was a public-disclosure heuristic; doesn't apply here.
+- [x] [Review][Decision][→ Patch] Comadre API-key transcript-exposure follow-up cue missing — promoted to a patch (P14 below): add a neutral "Known follow-ups" section noting the rotation cue at Story 1.2's `comadre_tts` registration. Does not restate the incident. Rationale unrelated to repo privacy: structural ergonomics for the Story 1.2 operator.
+- [x] [Review][Decision][Dismissed] Docker secret inventory enumeration beyond `n8n_encryption_key` (`:59`) — dismissed: repo is private, enumeration is acceptable as complete evidence.
+- [x] [Review][Decision][Dismissed] Domain + version fingerprint pair (`:23, 25, 27, 129`) — dismissed: repo is private, no public-disclosure risk, no CVE-matching concern.
+
+**Patch** (unambiguous fixes):
+
+- [x] [Review][Patch] Summary and "How this was verified" claim "four temporary verification workflows" but only three were created and listed [docs/infra-verification.md:9, 104, 106-108]. Spec Dev Agent Record line 318 already identified this as a story-text inconsistency; fix should align both to three.
+- [x] [Review][Patch] Summary says "All six infrastructure acceptance criteria" but spec defines AC1–AC8. Three different sections are tagged `(AC7)` ("Evolution API", "How this was verified", "Compliance notes"); AC8 (cleanup) has no dedicated section — its evidence is buried in the AC7-tagged verification section [docs/infra-verification.md:9, 92, 102, 117]. Fix: correct the count to "eight"; split the AC7 section tags correctly; give AC8 its own heading.
+- [x] [Review][Patch] CVE-2025-68613 fix-floor reasoning phrased as SemVer ordering claim — rewrite as explicit inheritance ("the fix shipped in 1.120.4; every 2.x release inherits it") with a pointer to n8n release notes [docs/infra-verification.md:26].
+- [x] [Review][Patch] Caddy Host-header requirement for IP access is not documented — `~/dev/comadre/docs/troubleshooting.md:58` explicitly calls out that Caddy only responds when the Host header matches `DOMAIN`. If Comadre is deployed with default `DOMAIN=localhost`, `https://10.10.10.207/` fails even with "Ignore SSL Issues" enabled. Add a one-sentence note pinning which `DOMAIN` Comadre was deployed with [docs/infra-verification.md:72-73].
+- [x] [Review][Patch] "NFR41 records the first observed dependency version string: `n8n 2.11.3`" contradicts the "Platform and tool versions observed" table which lists several dependencies — rephrase as "records the first set of observed dependency identities" [docs/infra-verification.md:123, 125-134].
+- [x] [Review][Patch] Redis SET result wording muddled — "succeeded (Redis `OK` status; n8n Redis node surfaces a successful Set as an empty item)" contradicts itself — simplify to one of the two [docs/infra-verification.md:49].
+- [x] [Review][Patch] "AR4" acronym used without definition; doc mixes AC / AR / FR / NFR label families without a legend [docs/infra-verification.md:26]. Fix: inline-define AR4 (e.g., "AR4 — platform version pinning requirement") or drop the reference.
+- [x] [Review][Patch] Version column header is "Version / identity" but PostgreSQL and Redis rows give image tags (`pgvector/pgvector:pg18`, `redis:8-alpine`) while n8n row gives a real version (`2.11.3`). Fix: either rename the column to "Image pin / identity" or add the actual running versions [docs/infra-verification.md:127-134].
+- [x] [Review][Patch] "Three disposable ad-hoc credentials" miscounts — the inline Comadre Bearer header is not an n8n credential entity; only two credentials (`_scratch_verify_postgres_adhoc`, `_scratch_verify_redis_adhoc`) existed [docs/infra-verification.md:9, 115]. Fix: rephrase as "two disposable ad-hoc credentials plus an inline Bearer header".
+- [x] [Review][Patch] Redis 60-second TTL race (first `GET` attempt returned `null` per spec Completion Notes line 308) is not surfaced as a reader-facing caveat — a future reader reproducing the walk-through step by step will hit the same race [docs/infra-verification.md:46-55]. Fix: add a one-sentence note that the two operations must fire inside the 60-second window (single execute-workflow run is safest).
+- [x] [Review][Patch] AC1 "loaded cleanly over HTTPS" does not pin which network path was tested — LAN direct access and the Cloudflare Tunnel production path would both produce the same observation but exercise different TLS stacks [docs/infra-verification.md:23-25]. Fix: add "via the Cloudflare Tunnel production path" qualifier.
+- [x] [Review][Patch] `SELECT extname FROM pg_extension WHERE extname = 'vector'` returns a row from whatever database the connection is attached to — no `SELECT current_database();` proof binds the extension confirmation to `n8n_db` [docs/infra-verification.md:36-41]. Fix: either add a `SELECT current_database()` evidence row, or a one-line caveat that the credential was configured against `n8n_db` (already stated at :38).
+- [x] [Review][Patch] No AC-by-AC pass/fail summary table — a reader has to reconstruct it from prose across multiple sections [doc-wide]. Fix: add a compact matrix near the Summary (AC / section reference / pass-fail).
+- [x] [Review][Patch] Add a brief "Known follow-ups" section (promoted from D3 above) noting that `COMADRE_API_KEY` rotation is recommended at the moment Story 1.2 registers the locked `comadre_tts` credential. No incident detail; a one-line structural cue only [docs/infra-verification.md doc-wide — new section].
+
+**Deferred** (real issues, but pre-existing spec-level decisions or out-of-scope for this diff):
+
+- [x] [Review][Defer] `$ANSIBLE_VAULT;1.1;AES256` header is falsifiable — true tamper-evidence is `ansible-vault view` succeeding with the backed-up password, which also proves the paper backup isn't stale. `docs/infra-verification.md:62-63` — deferred, pre-existing (AC5 spec line 49 defines the weaker check).
+- [x] [Review][Defer] `docker secret ls` confirms existence by name only; a zero-byte or malformed `n8n_encryption_key` would still list. Only a successful encrypted-credential decrypt would prove the value is well-formed. `docs/infra-verification.md:59-64` — deferred, pre-existing (AC5 spec defines the check as "present and created").
+- [x] [Review][Defer] "Ignore SSL Issues" guidance lacks MITM caveat for the LAN path. `docs/infra-verification.md:73` — deferred, pre-existing (AC6 spec lines 58-59 authorize the self-signed LAN path explicitly).
+- [x] [Review][Defer] "No residual state" claim for Redis ignores `execution_entity` rows written to Postgres by the manual executions. `docs/infra-verification.md:54-55, 115` — deferred, platform-level concern (n8n execution pruning), not a Story 1.1 compliance gap.
+- [x] [Review][Defer] Document is a point-in-time snapshot with no refresh policy for when BorgStack bumps the n8n pin. `docs/infra-verification.md:27, 129` — deferred, spec doesn't require a refresh policy; revisit as a project-wide documentation convention later.
+
+Dismissed as noise (15 findings): style nits ("architecturally satisfied" phrasing, "empty canvas" repetition, rhetorical framing, ISO timestamp parenthetical, italics inconsistency), defensible choices (explicit voice pass, "neural male" descriptor, AC1+AC2 bundled, "MP3 not default" hedge), acceptable operational notes (Swarm-manager assumption, `verify:infra` key name post-TTL, n8n binary viewer as playback aid), forward-looking claim about Story 1.2's `evolution_api` non-creation, and audio-duration math reasoning imprecision where the underlying figures are correct per `~/dev/comadre/src/comadre/service.py`.
 
 ## Dev Notes
 

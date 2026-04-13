@@ -6,7 +6,7 @@
 
 ## Summary
 
-All six infrastructure acceptance criteria for Story 1.1 passed. No production workflows were built; no locked credentials were created. The four temporary verification workflows and their three disposable ad-hoc credentials were discarded as part of Story 1.1 Task 7, leaving `borgstack-mini` clean for Story 1.2.
+All eight infrastructure acceptance criteria for Story 1.1 passed. No production workflows were built; no locked credentials were created. The three temporary verification workflows and their two disposable ad-hoc credentials (plus an inline Bearer header) were discarded as part of Story 1.1 Task 7, leaving `borgstack-mini` clean for Story 1.2.
 
 Verification covered:
 
@@ -18,12 +18,25 @@ Verification covered:
 
 Evolution API was **not** verified here — see the dedicated section below.
 
+### Acceptance criteria at a glance
+
+| AC | Requirement | Status | Section |
+|---|---|---|---|
+| AC1 | n8n editor reachable over HTTPS | Pass | n8n editor and version |
+| AC2 | n8n version is 2.x | Pass | n8n editor and version |
+| AC3 | Postgres reachable and `pgvector` in `n8n_db` | Pass | PostgreSQL and pgvector |
+| AC4 | Redis SET/GET roundtrip | Pass | Redis roundtrip |
+| AC5 | `n8n_encryption_key` + Ansible Vault + out-of-band backup | Pass | n8n encryption key and Ansible Vault |
+| AC6 | Comadre TTS reachable with Bearer + valid pt-BR audio | Pass | Comadre TTS |
+| AC7 | Verification document committed, English, zero secret values | Pass | this document as a whole |
+| AC8 | Temporary workflows and credentials discarded | Pass | How this was verified and cleanup |
+
 ## n8n editor and version (AC1, AC2)
 
 - **URL:** n8n editor behind Cloudflare Tunnel + Caddy at `mini_n8n_domain` (currently `n8n.pixeloddity.org`).
-- **HTTPS:** editor loaded cleanly — no TLS warnings, no 5xx.
+- **HTTPS:** editor loaded cleanly via the Cloudflare Tunnel production path (Browser → Cloudflare edge → `cloudflared` on `borgstack-mini` → Caddy → n8n editor — not a LAN-direct short-circuit) — no TLS warnings, no 5xx.
 - **Running version:** `2.11.3`, observed in Settings.
-- **2.x floor satisfied:** `2.11.3` is a 2.x release; AR4 is met. Every 2.x release is above `1.120.4`, so the CVE-2025-68613 fix floor is also satisfied regardless of minor.
+- **2.x floor satisfied:** `2.11.3` is a 2.x release; AR4 (the platform version pinning requirement — "n8n is any 2.x release") is met. The CVE-2025-68613 fix shipped in `1.120.4`, and every release in the 2.x series inherits it by release lineage (not by lexical string ordering), so the security floor is also satisfied regardless of which 2.x minor BorgStack pins.
 - **Upgrade cadence:** BorgStack pins the image in `~/dev/borgstack/inventory/shared/images.yml` (currently `n8nio/n8n:2.11.3`, `pixeloddity/n8n-worker:2.11.3`) and upgrades on operator cadence. This project does not demand a specific minor.
 
 ## PostgreSQL and pgvector (AC3)
@@ -35,7 +48,7 @@ Verified via a temporary workflow (`_scratch_verify-postgres`) built from an emp
 | Connectivity | `SELECT 1 AS ping;` | one row returned: `ping = 1` |
 | `pgvector` provisioned | `SELECT extname FROM pg_extension WHERE extname = 'vector';` | exactly one row returned: `extname = vector` |
 
-- **Connection:** host `postgresql`, port `5432`, database `n8n_db`, user `n8n_user`.
+- **Connection:** host `postgresql`, port `5432`, database `n8n_db`, user `n8n_user`. The ad-hoc credential pinned `database: n8n_db` explicitly, so the `pg_extension` query binds to `n8n_db`'s extension set and not to any other database in the cluster. A belt-and-braces check could add `SELECT current_database();` but AC3 did not require one.
 - **Single shared database:** `borgstack-mini` ships one application database. All chatbot tables will coexist in `n8n_db` alongside n8n's own tables. There is no separate `chatbot` database.
 - **Password source:** the `n8n_db_password` Docker Swarm secret, populated at deploy time from `vault_n8n_db_password` in Ansible Vault (`~/dev/borgstack/inventory/mini/group_vars/all/vault.yml`).
 - **Initialization reference:** `~/dev/borgstack/config/postgresql/init-databases-mini.sh` — `CREATE EXTENSION IF NOT EXISTS vector` on `n8n_db` at first container boot. This story verifies the extension is already present; no provisioning happens here.
@@ -46,13 +59,14 @@ Verified via a temporary workflow (`_scratch_verify-redis`) with a disposable ad
 
 | Step | Operation | Result |
 |---|---|---|
-| 1 | `SET verify:infra "ok" EX 60` | succeeded (Redis `OK` status; n8n Redis node surfaces a successful Set as an empty item) |
+| 1 | `SET verify:infra "ok" EX 60` | succeeded (n8n's Redis Set node returns an empty item on success) |
 | 2 | `GET verify:infra` | returned the string `ok` |
 
 - **Connection:** host `redis`, port `6379`, database `0`.
 - **Password source:** the `redis_password` Docker Swarm secret, populated from `vault_redis_password` in Ansible Vault.
 - **Key namespace:** `verify:*` is deliberately outside n8n's `n8n:*` queue-mode key namespace, so this test cannot collide with queue state.
 - **TTL:** the key expires after 60 seconds, so no residual state remains after verification. No cleanup was needed.
+- **Execution-time constraint:** the two operations must fire inside that 60-second window. In our verification session a first step-through reached the second operation after the TTL had expired (we discussed node wiring between the two runs), and `GET` correctly returned `null`. A single Execute Workflow run — both Set and Get fired back-to-back — returned `ok` as expected. Anyone reproducing this check should trigger the full workflow in one go rather than executing the two Redis nodes individually with a pause between them.
 
 ## n8n encryption key and Ansible Vault (AC5)
 
@@ -71,6 +85,7 @@ Verified via a temporary workflow (`_scratch_verify-comadre`) with a single HTTP
 
 - **Endpoint:** `POST https://10.10.10.207/v1/audio/speech`
 - **TLS:** Comadre runs its own Caddy reverse proxy; the host is an IP (`10.10.10.207`), so the certificate is self-signed and the n8n HTTP Request node was configured with **Ignore SSL Issues** enabled. This is the path AC6 contemplates explicitly.
+- **Host-header match:** Comadre's Caddyfile binds the vhost to `{$DOMAIN:localhost}` and only responds when the inbound `Host` header matches `DOMAIN`. On this host Comadre was deployed with `DOMAIN=10.10.10.207` in `/home/galvani/comadre/.env`, so the IP-direct request matches. Anyone reproducing the check against a Comadre instance that still runs with the default `DOMAIN=localhost` will get a 308/404 from Caddy even with TLS verification disabled — the fix is to set `DOMAIN` to the hostname or IP the n8n HTTP Request node will use. See `~/dev/comadre/docs/troubleshooting.md` for the upstream troubleshooting note.
 - **Auth:** `Authorization: Bearer <COMADRE_API_KEY>`. The key lives on `10.10.10.207` in `/home/galvani/comadre/.env` and is not recorded anywhere in this repository.
 - **Request body (JSON):**
   ```json
@@ -99,9 +114,9 @@ Evolution API is **explicitly out of scope** for this verification story.
 
 **Credential posture:** the locked credential name `evolution_api` is **not** created in this story and is not created by Story 1.2 either. Story 8.2 registers it when it first becomes needed.
 
-## How this was verified (AC7)
+## How this was verified and cleanup (AC7, AC8)
 
-Verification was performed live in the n8n editor against the running `borgstack-mini` deployment (not a staging copy, not a local Docker Compose sandbox). Four temporary workflows were created on an empty canvas:
+Verification was performed live in the n8n editor against the running `borgstack-mini` deployment (not a staging copy, not a local Docker Compose sandbox). Three temporary workflows were created on an empty canvas:
 
 - `_scratch_verify-postgres` — Manual Trigger → Postgres (Execute Query, two queries)
 - `_scratch_verify-redis` — Manual Trigger → Redis (Set) → Redis (Get)
@@ -112,7 +127,7 @@ Host-side checks:
 - `docker secret ls` on `10.10.10.205` for `n8n_encryption_key` presence.
 - Reading the first line of `~/dev/borgstack/inventory/mini/group_vars/all/vault.yml` for the Ansible Vault encrypted-at-rest signature.
 
-Each n8n workflow used a disposable, ad-hoc credential — never one of the locked names Story 1.2 owns (`postgres_main`, `redis_main`, `comadre_tts`, `evolution_api`). The three ad-hoc credentials (`_scratch_verify_postgres_adhoc`, `_scratch_verify_redis_adhoc`, and the inline Comadre Bearer) and the four temporary workflows were deleted in Story 1.1 Task 7, leaving the n8n workflow list and credentials list empty for Story 1.2.
+Each n8n workflow used a disposable, ad-hoc credential — never one of the locked names Story 1.2 owns (`postgres_main`, `redis_main`, `comadre_tts`, `evolution_api`). The two ad-hoc credentials (`_scratch_verify_postgres_adhoc`, `_scratch_verify_redis_adhoc`), the inline Comadre Bearer header (which was never saved as an n8n credential entity), and the three temporary workflows were all removed in Story 1.1 Task 7, leaving the n8n workflow list and credentials list empty for Story 1.2.
 
 ## Compliance notes (AC7)
 
@@ -120,11 +135,11 @@ Each n8n workflow used a disposable, ad-hoc credential — never one of the lock
 - **Secret values:** zero. Every secret is referenced by Docker secret name, Ansible Vault variable name, or reference-only pointer to where it is stored.
 - **FR41 (credential encryption at rest):** architecturally satisfied by the `n8n_encryption_key` chain verified in the AC5 section above.
 - **NFR9 (credential encryption enforced):** satisfied by `n8n_encryption_key` presence in Swarm; every credential n8n registers from this point onwards is automatically encrypted at rest.
-- **NFR41 (explicit dependency list):** this document records the first observed dependency version string: `n8n 2.11.3`.
+- **NFR41 (explicit dependency list):** this document records the first set of observed dependency identities for the project — see the "Platform and tool versions observed" table below.
 
 ## Platform and tool versions observed
 
-| Component | Version / identity | Source |
+| Component | Image pin / identity | Source |
 |---|---|---|
 | n8n | `2.11.3` (any 2.x acceptable) | observed in editor Settings; pinned in `~/dev/borgstack/inventory/shared/images.yml` |
 | PostgreSQL + `pgvector` | image `pgvector/pgvector:pg18`; `vector` extension present in `n8n_db` at boot | `~/dev/borgstack/inventory/shared/images.yml`, `~/dev/borgstack/config/postgresql/init-databases-mini.sh` |
@@ -132,3 +147,7 @@ Each n8n workflow used a disposable, ad-hoc credential — never one of the lock
 | Comadre | own Caddy on `10.10.10.207`, OpenAI-compatible `POST /v1/audio/speech`, default voice `kokoro/pm_santa`, default output OGG Opus, Bearer auth mandatory | `~/dev/comadre/compose.yaml`, `~/dev/comadre/deploy/caddy/Caddyfile`, `~/dev/comadre/README.md` |
 | `borgstack-mini` host | `10.10.10.205` | `~/dev/borgstack/inventory/mini/hosts` |
 | Comadre host | `10.10.10.207` | `~/dev/comadre/deploy/ansible/inventory/production.yml.example` |
+
+## Known follow-ups
+
+- **Rotate `COMADRE_API_KEY` at Story 1.2's `comadre_tts` credential registration.** Story 1.2 is the natural clean-slate moment for Comadre auth — the credential list transitions from empty to the seven locked names Story 1.2 owns, and the operational cost of a rotation is trivial. Rotating then closes any residual exposure envelope accumulated during Story 1.1's verification pass (including any transient capture of the key in operator terminals or session transcripts).
