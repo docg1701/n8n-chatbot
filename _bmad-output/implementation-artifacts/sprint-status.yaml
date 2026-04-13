@@ -1,5 +1,5 @@
 # generated: 2026-04-11
-# last_updated: 2026-04-12
+# last_updated: 2026-04-13
 # project: n8n-chatbot
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-11
-last_updated: 2026-04-12
+last_updated: 2026-04-13
 project: n8n-chatbot
 project_key: NOKEY
 tracking_system: file-system
@@ -45,7 +45,7 @@ development_status:
   # Epic 1: Client Can Reach the Firm on Telegram
   epic-1: in-progress
   1-1-infrastructure-verification-n8n-platform-pinning: done
-  1-2-credential-environment-variable-and-telegram-group-bootstrap: backlog
+  1-2-credential-environment-variable-and-telegram-group-bootstrap: ready-for-dev
   1-3-empty-canvas-workflow-shells-and-naming-conventions: backlog
   1-4-wire-up-minimal-telegram-echo-bot: backlog
   epic-1-retrospective: optional
